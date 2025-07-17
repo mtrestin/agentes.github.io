@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>TRESTTO | Dashboard Dinâmico</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body class="bg-black text-white p-4 font-sans">
+  <div class="flex">
+    <div class="flex-1">
+      <h1 class="text-3xl font-bold mb-6 text-yellow-400">TRESTTO Dashboard</h1>
+      <input type="file" id="uploadExcel" accept=".xlsx" class="mb-4 bg-zinc-800 text-white p-2 rounded" />
+      <!-- Filtros para Matriz -->
+      <div class="flex flex-wrap gap-4 mb-6">
+        <select id="filtroCliente" class="bg-zinc-700 text-white p-2 rounded"></select>
+        <select id="filtroAno" class="bg-zinc-700 text-white p-2 rounded"></select>
+        <select id="filtroMes" class="bg-zinc-700 text-white p-2 rounded"></select>
+      </div>
+
+      <!-- Tabela de Clientes por Dia -->
+      <div id="listaClientes" class="overflow-x-auto mb-8"></div>
+
+      <!-- Gráfico de Agentes por Dia -->
+      <canvas id="graficoDia" height="100"></canvas>
+
+      <!-- Gráfico de Média Mensal -->
+      <div class="mt-8">
+        <h3 class="text-lg font-medium mb-2">Média Mensal por Cliente</h3>
+        <div class="mb-4">
+          <label for="filtroMesChart" class="mr-2">Mês:</label>
+          <select id="filtroMesChart" class="bg-zinc-700 text-white p-2 rounded"></select>
+          <label for="filtroAnoChart" class="ml-4 mr-2">Ano:</label>
+          <select id="filtroAnoChart" class="bg-zinc-700 text-white p-2 rounded"></select>
+        </div>
+        <canvas id="graficoMes" height="50"></canvas>
+      </div>
+
+      <!-- Gráfico Top10 com Filtro de Ano -->
+      <div class="mt-8">
+        <h3 class="text-lg font-medium mb-2">Top 10 Clientes - Tendência Mensal</h3>
+        <div class="mb-4">
+          <label for="filtroAnoTop10" class="mr-2">Ano:</label>
+          <select id="filtroAnoTop10" class="bg-zinc-700 text-white p-2 rounded"></select>
+        </div>
+        <canvas id="graficoTop10" height="100"></canvas>
+      </div>
+    </div>
+    <div class="relative">
+      <button onclick="toggleMenu()" class="fixed right-4 top-4 z-50 bg-yellow-500 text-black px-4 py-2 rounded shadow">📌 Destaques</button>
+      <div id="menuDestaques" class="fixed right-0 top-0 h-full w-80 bg-zinc-900 shadow-lg transform translate-x-full transition-transform duration-300 z-40 overflow-y-auto p-6">
+        <h2 class="text-xl font-bold mb-4 text-yellow-400">Destaques do Mês</h2>
+        <div id="conteudoDestaques" class="space-y-4 text-sm"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gráficos Comparativos -->
+  <div class="flex gap-8 mt-8">
+    <div class="w-1/2">
+      <h3 class="text-lg font-medium mb-2">2024: Soma das Médias Mensais</h3>
+      <canvas id="grafico2024" height="100"></canvas>
+    </div>
+    <div class="w-1/2">
+      <h3 class="text-lg font-medium mb-2">2025: Soma das Médias Mensais</h3>
+      <canvas id="grafico2025" height="100"></canvas>
+    </div>
+  </div>
+
+  <script>
+    let dados = [];
+let totalPorDiaMap = {};
+let chartDia, chartMes, chartTop10, chart2024, chart2025;
+
+    function toggleMenu() {
+      document.getElementById("menuDestaques").classList.toggle("translate-x-full");
+    }
+
+    document.getElementById('uploadExcel').addEventListener('change', e => {
+      const reader = new FileReader();
+      reader.onload = event => {
+        const data = new Uint8Array(event.target.result);
+        const wb = XLSX.read(data, { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        dados = json.map(r => ({
+          cliente: r.cliente || r.Cliente || r.CLIENTE,
+          ano: +r.ano || +r.Ano || 0,
+          mes: +r.mes || +r['mês'] || +r.MÊS || +r['Mês'] || 0,
+          dia: +r.dia || +r.Dia || 0,
+          agentes: +r.agentesdigitais || +r.AgentesDigitais || 0
+        }));
+        preencherFiltros();
+        atualizarTudo();
+      };
+      reader.readAsArrayBuffer(e.target.files[0]);
+    });
+
+    function preencherFiltros() {
+      const fC = document.getElementById('filtroCliente');
+      const fA = document.getElementById('filtroAno');
+      const fM = document.getElementById('filtroMes');
+      const fMC = document.getElementById('filtroMesChart');
+      const fAC = document.getElementById('filtroAnoChart');
+      const fT = document.getElementById('filtroAnoTop10');
+
+      const clientes = [...new Set(dados.map(d => d.cliente))].sort();
+      const anos = [...new Set(dados.map(d => d.ano))].sort((a,b)=>a-b);
+      const meses = [...new Set(dados.map(d => d.mes))].sort((a,b)=>a-b);
+
+      const opts = arr => '<option value="">Todos</option>' + arr.map(v=>`<option>${v}</option>`).join('');
+      fC.innerHTML = opts(clientes);
+      fA.innerHTML = opts(anos);
+      fM.innerHTML = opts(meses);
+      fMC.innerHTML = opts(meses);
+      fAC.innerHTML = opts(anos);
+      fT.innerHTML = opts(anos);
+
+      // alinhar defaults
+      fMC.value = fM.value;
+      fAC.value = fA.value;
+      fT.value = '2025';  // default Top10 ano 2025
+
+      // handlers
+      fC.onchange = fA.onchange = fM.onchange = atualizarTudo;
+      fMC.onchange = renderMes;
+      fAC.onchange = renderMes;
+      fT.onchange = renderTop10;
+    }
+function atualizarTudo() {
+      gerarClientes();
+      renderDia();
+      renderMes();
+      renderTop10();
+      renderComparativo();
+      renderDestaques();
+    }
+
+    function gerarClientes() {
+      const clienteFiltro = document.getElementById('filtroCliente').value;
+      const anoFiltro = document.getElementById('filtroAno').value;
+      const mesFiltro = document.getElementById('filtroMes').value;
+
+      const filtrado = dados.filter(d =>
+        (!clienteFiltro || d.cliente === clienteFiltro) &&
+        (!anoFiltro || d.ano == anoFiltro) &&
+        (!mesFiltro || d.mes == mesFiltro)
+      );
+
+      const agrupado = {};
+      filtrado.forEach(d => {
+        if (!agrupado[d.cliente]) agrupado[d.cliente] = {};
+        agrupado[d.cliente][d.dia] = (agrupado[d.cliente][d.dia] || 0) + d.agentes;
+      });
+
+      const diasUnicos = [...new Set(filtrado.map(d => d.dia))].sort((a, b) => a - b);
+      // Calcular totalPorDia com base na matriz
+      const totalPorDia = diasUnicos.reduce((acc, day) => {
+        acc[day] = Object.values(agrupado).reduce((sum, cd) => sum + (cd[day] || 0), 0);
+        return acc;
+      }, {});
+      // Atualiza variável global para uso em renderDia
+      totalPorDiaMap = totalPorDia;
+
+      let html = '<table class="table-auto w-full border border-zinc-600 text-sm">';
+      html += '<thead><tr class="bg-zinc-800"><th>Cliente</th>';
+      diasUnicos.forEach(d => html += `<th>${d}</th>`);
+      html += '<th>Média Mensal</th></tr></thead><tbody>';
+
+      Object.entries(agrupado).sort((a,b)=>{
+        const mediaA = diasUnicos.reduce((s,day)=>s+(a[1][day]||0),0)/diasUnicos.length;
+        const mediaB = diasUnicos.reduce((s,day)=>s+(b[1][day]||0),0)/diasUnicos.length;
+        return mediaB - mediaA;
+      }).forEach(([cliente, diasData]) => {
+        html += `<tr><td class="text-yellow-400 font-bold">${cliente}</td>`;
+        let soma = 0;
+        diasUnicos.forEach(d => {
+          const val = diasData[d] || 0;
+          soma += val;
+          html += `<td class="text-center">${val}</td>`;
+        });
+        const mediaMensal = diasUnicos.length ? (soma / diasUnicos.length).toFixed(1) : '0';
+        html += `<td class="text-center font-bold">${mediaMensal}</td></tr>`;
+      });
+
+      // Linha Total (já gerada em totalPorDiaMap)
+      const somaMedias = Object.values(agrupado).reduce((s, diasData) => {
+        const soma = diasUnicos.reduce((ss, d) => ss + (diasData[d] || 0), 0);
+        return s + (diasUnicos.length ? soma / diasUnicos.length : 0);
+      }, 0);
+
+      html += '<tr class="bg-zinc-800 font-bold"><td>Total</td>';
+      diasUnicos.forEach(d => html += `<td class="text-center">${totalPorDia[d]}</td>`);
+      html += `<td class="text-center">${somaMedias.toFixed(1)}</td></tr>`;
+      html += '</tbody></table>';
+
+      document.getElementById('listaClientes').innerHTML = html;
+    }
+
+    function renderDia() {
+      // Usa o totalPorDiaMap calculado na matriz como fonte de dados
+      const labels = Object.keys(totalPorDiaMap).sort((a, b) => a - b);
+      const data = labels.map(l => totalPorDiaMap[l]);
+      if (chartDia) chartDia.destroy();
+      chartDia = new Chart(document.getElementById('graficoDia'), {
+        type: 'line',
+        data: { labels, datasets: [{ label: 'Total Diário (Matriz)', data, borderColor: 'yellow', fill: false }] },
+        options: { responsive: true }
+      });
+    }
+
+    function renderMes() {
+      const mesFiltro = document.getElementById('filtroMesChart').value;
+      const anoFiltro = document.getElementById('filtroAnoChart').value;
+      const filtrado = dados.filter(d => (!mesFiltro || d.mes == mesFiltro) && (!anoFiltro || d.ano == anoFiltro));
+      const sumMap = {};
+      const countMap = {};
+      filtrado.forEach(d => {
+        sumMap[d.cliente] = (sumMap[d.cliente] || 0) + d.agentes;
+        countMap[d.cliente] = new Set(filtrado.filter(x => x.cliente === d.cliente).map(x => x.dia)).size;
+      });
+      const labels = Object.keys(sumMap);
+      const data = labels.map(c => parseFloat((sumMap[c] / (countMap[c] || 1)).toFixed(1)));
+      if (chartMes) chartMes.destroy();
+      chartMes = new Chart(document.getElementById('graficoMes'), {
+        type: 'bar', data: { labels, datasets: [{ label: 'Média Diária no Mês', data, backgroundColor: 'orange' }] }, options: { responsive: true, scales: { x: { ticks: { color: 'white' } }, y: { ticks: { color: 'white' } } }, plugins: { legend: { labels: { color: 'white' } } } }
+      });
+    }
+
+    function renderTop10() {
+      const anoFiltro = document.getElementById('filtroAnoTop10').value;
+      const filtrado = dados.filter(d => d.ano == anoFiltro);
+      const sumMap = {};
+      filtrado.forEach(d => sumMap[d.cliente] = (sumMap[d.cliente] || 0) + d.agentes);
+      const top10 = Object.entries(sumMap).sort((a,b)=>b[1]-a[1]).slice(0,10).map(e=>e[0]);
+      const mesesLabels = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+      const datasets = top10.map((cli,i) => ({
+        label: cli,
+        data: mesesLabels.map((_, idx) => {
+          const m = idx+1;
+          const regs = filtrado.filter(d => d.cliente === cli && d.mes === m);
+          const days = new Set(regs.map(r => r.dia)).size;
+          const total = regs.reduce((s,r)=>s+r.agentes,0);
+          return days?parseFloat((total/days).toFixed(1)):0;
+        }),
+        fill: false
+      }));
+      if (chartTop10) chartTop10.destroy();
+      chartTop10 = new Chart(document.getElementById('graficoTop10'), {
+        type: 'line', data: { labels: mesesLabels, datasets }, options: { responsive: true, scales: { x: { ticks: { color: 'white' } }, y: { ticks: { color: 'white' } } }, plugins: { legend: { labels: { color: 'white' } } } }
+      });
+    }
+
+    function renderComparativo() {
+      [2024,2025].forEach(year => {
+        const filtrado = dados.filter(d => d.ano == year);
+        const mesesLabels = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+        const sums = mesesLabels.map((_, idx) => {
+          const m = idx+1;
+          const regs = filtrado.filter(d => d.mes === m);
+          const days = new Set(regs.map(r=>r.dia)).size;
+          const total = regs.reduce((s,r)=>s+r.agentes,0);
+          return days?parseFloat((total/days).toFixed(1)):0;
+        });
+        if (year===2024 && chart2024) chart2024.destroy();
+        if (year===2025 && chart2025) chart2025.destroy();
+        const ctxId = 'grafico' + year;
+        if (year===2024) chart2024 = new Chart(document.getElementById(ctxId), { type: 'bar', data: { labels: mesesLabels, datasets: [{ label: year+' Médias Somadas', data: sums, backgroundColor: 'skyblue' }] }, options: { responsive: true, scales: { x: { ticks: { color: 'white' } }, y: { ticks: { color: 'white' } } }, plugins: { legend: { labels: { color: 'white' } } } } });
+        else chart2025 = new Chart(document.getElementById(ctxId), { type: 'bar', data: { labels: mesesLabels, datasets: [{ label: year+' Médias Somadas', data: sums, backgroundColor: 'skyblue' }] }, options: { responsive: true, scales: { x: { ticks: { color: 'white' } }, y: { ticks: { color: 'white' } } }, plugins: { legend: { labels: { color: 'white' } } } } });
+      });
+    }
+
+    function renderDestaques() {
+      const anoFiltro = document.getElementById('filtroAno').value;
+      const mesFiltro = document.getElementById('filtroMes').value;
+      const filtrado = dados.filter(d => (!anoFiltro || d.ano==anoFiltro) && (!mesFiltro || d.mes==mesFiltro));
+      const container = document.getElementById('conteudoDestaques');
+      if (!filtrado.length) { container.innerHTML = '<p>Nenhum dado disponível.</p>'; return; }
+      const clientes = [...new Set(filtrado.map(d=>d.cliente))];
+      const medias = {};
+      const variacoes = {};
+      clientes.forEach(cli => {
+        const arr = filtrado.filter(d=>d.cliente===cli).map(d=>d.agentes);
+        medias[cli] = arr.reduce((a,b)=>a+b,0)/arr.length;
+        variacoes[cli] = Math.max(...arr)-Math.min(...arr);
+      });
+      const maxMed = Object.keys(medias).reduce((a,b)=>medias[a]>medias[b]?a:b);
+      const maxVar = Object.keys(variacoes).reduce((a,b)=>variacoes[a]>variacoes[b]?a:b);
+      const prev = new Set(dados.filter(d=>d.ano<anoFiltro||(d.ano==anoFiltro&&d.mes<mesFiltro)).map(d=>d.cliente));
+      const novos = clientes.filter(c=>!prev.has(c));
+      container.innerHTML = `<div><strong>🔝 Maior Volume Médio:</strong><br>${maxMed} (${medias[maxMed].toFixed(1)})</div><div><strong>📉 Maior Variação:</strong><br>${maxVar} (${variacoes[maxVar]})</div><div><strong>🆕 Cliente Novo:</strong><br>${novos[0]||'Nenhum cliente'}</div>`;
+    }
+  </script>
+</body>
+</html>
